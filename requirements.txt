@@ -1,0 +1,23 @@
+python-dotenv>=0.21.0
+langchain>=0.1.0,<0.2.0
+langchain-community>=0.0.30,<0.1.0
+langchain-text-splitters>=0.0.1,<0.1.0
+ollama>=0.1.8,<0.2.0
+sentence-transformers>=2.2.0
+chromadb>=0.4.20,<0.5.0
+pypdf>=3.17.0,<4.0.0 # For PyPDFLoader
+# For UnstructuredWordDocumentLoader and UnstructuredHTMLLoader
+# Unstructured has many sub-dependencies.
+# Installing 'unstructured' and then specific parsers is usually needed.
+# e.g., 'pip install unstructured libmagic python-magic-bin pdf2image'
+# For simplicity, LangChain's Unstructured loaders usually guide on missing deps.
+# Let's assume the user will install specific unstructured dependencies if errors arise.
+# A common one for DOCX is 'python-docx'. For HTML, 'lxml' or 'beautifulsoup4'.
+# LangChain's Unstructured loaders try to use what's available.
+unstructured # Base unstructured library
+# Optional, but good for DOCX and HTML if not pulled by unstructured:
+python-docx 
+beautifulsoup4 
+lxml
+# For logging colors (optional, but nice for CLI)
+# colorlog

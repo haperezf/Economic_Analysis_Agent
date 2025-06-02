@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AARL • Agente para el Análisis Regulatorio y Legal</title>
+
+    <!-- Google Fonts for a clean, consulting-grade look -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&family=Lora:wght@400;600&display=swap" rel="stylesheet" />
+
+    <!-- Marked.js (CDN) for client-side Markdown → HTML parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        :root {
+            --primary: #0b4eb3;
+            --primary-dark: #073a8a;
+            --secondary: #f4f7fb;
+            --muted: #6b7280;
+            --radius: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Poppins", sans-serif;
+            background: var(--secondary);
+            color: #1f2937; /* neutral 800 */
+        }
+
+        /* ---------- Shell ---------- */
+        .container {
+            max-width: 960px;
+            margin: 48px auto;
+            padding: 48px 56px;
+            background: #fff;
+            border-radius: var(--radius);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.07);
+        }
+
+        h1 {
+            margin: 0 0 32px;
+            font-size: 2.125rem;
+            font-weight: 600;
+            text-align: center;
+            color: var(--primary);
+            letter-spacing: 0.03em;
+        }
+
+        /* ---------- Form ---------- */
+        form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px 32px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--muted);
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            padding: 14px 16px;
+            border: 1px solid #d1d5db; /* neutral 300 */
+            border-radius: var(--radius);
+            font-size: 1rem;
+            font-family: "Poppins", sans-serif;
+            color: #1f2937;
+            background: #fff;
+            transition: border-color 0.15s ease-in-out;
+        }
+
+        textarea {
+            min-height: 140px;
+            resize: vertical;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            grid-column: 1 / -1; /* span full width */
+        }
+
+        .checkbox input {
+            width: auto;
+        }
+
+        button[type="submit"] {
+            grid-column: 1 / -1;
+            justify-self: center;
+            padding: 14px 42px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+            cursor: pointer;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        }
+
+        button[type="submit"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        }
+
+        /* ---------- Loader ---------- */
+        .loader {
+            display: none;
+            margin: 40px auto 0;
+            width: 48px;
+            height: 48px;
+            border: 5px solid #e5e7eb; /* neutral 200 */
+            border-top: 5px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* ---------- Report ­Cards ---------- */
+        .report {
+            margin-top: 56px;
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: var(--radius);
+            padding: 32px;
+            margin-bottom: 32px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+        }
+
+        .card h2,
+        .card h3 {
+            margin-top: 0;
+            font-family: "Lora", serif;
+            color: var(--primary);
+        }
+
+        .card h2 {
+            font-size: 1.35rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .card h3 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .card .content {
+            font-family: "Lora", serif;
+            line-height: 1.75;
+        }
+
+        /* Markdown typography tweaks */
+        .content p {
+            margin: 0 0 1.15em;
+        }
+        .content ul {
+            padding-left: 1.4em;
+            margin: 0 0 1.15em;
+        }
+        .content li {
+            margin: 0.25em 0;
+        }
+        .content strong {
+            font-weight: 600;
+        }
+        .content em {
+            font-style: italic;
+        }
+        .content code {
+            background: #f3f4f6;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: "Poppins", monospace;
+            font-size: 0.95rem;
+        }
+        pre code {
+            display: block;
+            padding: 16px;
+            overflow: auto;
+        }
+        pre.log {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: var(--radius);
+            padding: 20px;
+            overflow: auto;
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
+        .error {
+            color: #dc2626; /* red 600 */
+            font-weight: 600;
+            margin-top: -16px;
+            margin-bottom: 32px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agente para el Análisis Regulatorio y Legal</h1>
+
+        <!-- --------------- FORM --------------- -->
+        <form id="analysisForm">
+            <div>
+                <label for="query">Consulta Principal</label>
+                <textarea id="query" name="query" required>
+Analizar exhaustivamente y con profundidad los objetivos principales del documento (o documentos) disponibles, sus costos asociados (si se mencionan), y sus impactos económicos directos e indirectos tanto para los operadores (pequeños y grandes) como para los consumidores finales, en el contexto de las telecomunicaciones en Colombia.</textarea>
+            </div>
+
+            <div>
+                <label for="analysis_type">Tipo de análisis para el Agente 1</label>
+                <select id="analysis_type" name="analysis_type">
+                    <option value="cot_analysis" selected>Análisis CoT profundo</option>
+                    <option value="basic_rag">RAG básico</option>
+                    <option value="tot_exploration">Exploración ToT</option>
+                    <option value="ain_extraction">Extracción AIN</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="aspect_to_analyze">Aspecto / Tema principal a analizar (CoT/ToT)</label>
+                <input
+                    type="text"
+                    id="aspect_to_analyze"
+                    name="aspect_to_analyze"
+                    value="objetivos, costos e impactos económicos generales de los documentos disponibles"
+                />
+            </div>
+
+            <div>
+                <label for="k_retrieval">Chunks a recuperar (k)</label>
+                <input type="number" id="k_retrieval" name="k_retrieval" value="8" min="1" />
+            </div>
+
+            <div class="checkbox">
+                <input type="checkbox" id="force_reprocess_all" name="force_reprocess_all" />
+                <label for="force_reprocess_all">Forzar re-indexación completa del directorio de documentos</label>
+            </div>
+
+            <button type="submit">Ejecutar análisis</button>
+        </form>
+
+        <!-- --------------- LOADER --------------- -->
+        <div class="loader" id="loader"></div>
+
+        <!-- --------------- REPORT --------------- -->
+        <section class="report" id="resultsArea" style="display: none">
+            <article class="card">
+                <h2>Consulta original</h2>
+                <div class="content" id="resultOriginalQuery"></div>
+            </article>
+
+            <article class="card">
+                <h2>Informe del consultor (Agente&nbsp;1)</h2>
+                <div class="content" id="resultAgent1"></div>
+            </article>
+
+            <article class="card">
+                <h2>Meta-análisis ejecutivo (Agente&nbsp;2)</h2>
+                <div class="content" id="resultAgent2"></div>
+            </article>
+
+            <article class="card">
+                <h3>Bitácora técnica</h3>
+                <pre class="log" id="resultLog"></pre>
+            </article>
+
+            <p class="error" id="resultError"></p>
+        </section>
+    </div>
+
+    <!-- --------------- SCRIPT --------------- -->
+    <script>
+        const form = document.getElementById("analysisForm");
+        const loader = document.getElementById("loader");
+        const resultsArea = document.getElementById("resultsArea");
+
+        const original = document.getElementById("resultOriginalQuery");
+        const agent1 = document.getElementById("resultAgent1");
+        const agent2 = document.getElementById("resultAgent2");
+        const log = document.getElementById("resultLog");
+        const err = document.getElementById("resultError");
+
+        /**
+         * Renders Markdown → HTML using marked.js.
+         * If the input isn't valid Markdown, marked will still wrap paragraphs appropriately.
+         */
+        function renderMarkdown(text) {
+            if (!text) return "<p>N/D</p>";
+            return marked.parse(text, { breaks: true, mangle: false, headerIds: false });
+        }
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            // ------- gather form data -------
+            const requestData = {
+                query: document.getElementById("query").value,
+                aspect_to_analyze: document.getElementById("aspect_to_analyze").value,
+                analysis_type: document.getElementById("analysis_type").value,
+                k_retrieval: +document.getElementById("k_retrieval").value,
+                force_reprocess_entire_directory: document.getElementById("force_reprocess_all").checked,
+            };
+
+            // ------- reset UI -------
+            resultsArea.style.display = "none";
+            err.textContent = "";
+            [original, agent1, agent2, log].forEach((el) => (el.innerHTML = ""));
+
+            loader.style.display = "block";
+
+            try {
+                const res = await fetch("http://localhost:8000/analyze", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(requestData),
+                });
+
+                const data = await res.json();
+
+                loader.style.display = "none";
+                resultsArea.style.display = "block";
+
+                if (!res.ok) throw new Error(data.detail || "Error desconocido del servidor.");
+
+                original.innerHTML = renderMarkdown(data.original_query);
+                agent1.innerHTML = renderMarkdown(data.earia_result);
+                agent2.innerHTML = renderMarkdown(data.interpreter_result);
+                log.textContent = (data.execution_log || []).join("\n- ");
+
+                if (data.error_message) err.textContent = data.error_message;
+            } catch (error) {
+                loader.style.display = "none";
+                resultsArea.style.display = "block";
+                err.textContent = `Error en la petición: ${error.message}`;
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

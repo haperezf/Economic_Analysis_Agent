@@ -1,0 +1,326 @@
+# earia_agent/agent_core/earia_agent.py
+
+import os
+import hashlib
+from typing import List, Dict, Any, Optional
+
+# Asegúrate de que las rutas de importación sean correctas para tu estructura de proyecto
+from ..data_ingestion.document_loader import DocumentLoader
+from ..data_ingestion.text_processor import TextProcessor
+from ..knowledge_base.vector_store_manager import VectorStoreManager
+from .llm_handler import LLMHandler # LLMHandler debe tener el método generate_title_and_summary
+import logging
+
+logger = logging.getLogger(__name__)
+# La configuración básica de logging debe hacerse en el punto de entrada principal de la aplicación (main.py o run_langgraph_earia_real.py)
+# logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper()) # Comentado aquí
+
+# Define analysis types (se mantienen igual)
+ANALYSIS_TYPE_BASIC_RAG = "basic_rag"
+ANALYSIS_TYPE_COT = "cot_analysis"
+ANALYSIS_TYPE_TOT = "tot_exploration"
+ANALYSIS_TYPE_AIN_EXTRACT = "ain_extraction"
+
+
+class EARIAAgent:
+    """
+    Economic Agent for Regulatory Impact Analysis.
+    Orchestrates document ingestion, knowledge base interaction, and LLM analysis.
+    """
+    def __init__(self,
+                 llm_handler: Optional[LLMHandler] = None,
+                 vector_store_manager: Optional[VectorStoreManager] = None,
+                 document_loader: Optional[DocumentLoader] = None,
+                 text_processor: Optional[TextProcessor] = None):
+        """
+        Initializes the EARIAAgent.
+        Allows injecting dependencies for flexibility, otherwise creates defaults.
+        """
+        logger.info("Initializing EARIAAgent...")
+        self.doc_loader = document_loader if document_loader else DocumentLoader()
+        self.text_processor = text_processor if text_processor else TextProcessor()
+        self.vector_manager = vector_store_manager if vector_store_manager else VectorStoreManager()
+        self.llm_handler = llm_handler if llm_handler else LLMHandler()
+        
+        self._processed_files_cache = set() 
+        logger.info("EARIAAgent initialized.")
+
+    def _get_file_hash(self, file_path: str) -> Optional[str]:
+        """Generates an MD5 hash for a file to check if it has changed."""
+        try:
+            hasher = hashlib.md5()
+            with open(file_path, 'rb') as f:
+                buf = f.read()
+                hasher.update(buf)
+            return hasher.hexdigest()
+        except FileNotFoundError:
+            logger.error(f"File not found for hashing: {file_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Error hashing file {file_path}: {e}", exc_info=True)
+            return None
+
+    def process_and_index_documents(self, doc_paths: List[str], force_reprocess: bool = False) -> bool:
+        """
+        Loads, processes, and indexes documents into the vector store.
+        Skips processing if a file appears to be unchanged and already processed, unless force_reprocess is True.
+
+        Returns:
+            bool: True if all specified documents were processed (or skipped due to cache) successfully,
+                  False if any critical error occurred during processing or indexing of a document.
+        """
+        any_new_documents_processed_successfully = False
+        all_documents_handled_without_critical_failure = True
+
+        for doc_path in doc_paths:
+            if not os.path.exists(doc_path):
+                logger.warning(f"Document path does not exist, skipping: {doc_path}")
+                continue # Skip this non-existent file, but don't mark the whole operation as failed yet.
+
+            file_hash = self._get_file_hash(doc_path)
+            if file_hash is None:
+                logger.warning(f"Skipping document due to hashing error: {doc_path}")
+                all_documents_handled_without_critical_failure = False # Hashing error is problematic
+                continue
+                
+            cache_key = (doc_path, file_hash)
+
+            if not force_reprocess and cache_key in self._processed_files_cache:
+                logger.info(f"Document {doc_path} (hash: {file_hash}) already processed and indexed. Skipping.")
+                continue
+            
+            logger.info(f"Processing document: {doc_path}")
+            try:
+                # DocumentLoader.load_single_document devuelve List[Document]
+                loaded_pages = self.doc_loader.load_single_document(doc_path)
+                if not loaded_pages:
+                    logger.warning(f"No content loaded from {doc_path}. Skipping.")
+                    continue
+
+                # TextProcessor.chunk_documents espera List[Document] y devuelve List[Document] (chunks)
+                chunks = self.text_processor.chunk_documents(loaded_pages)
+                if not chunks:
+                    logger.warning(f"No chunks generated from {doc_path}. Skipping.")
+                    continue
+                
+                # VectorStoreManager.add_documents ahora devuelve un booleano
+                if self.vector_manager.add_documents(chunks):
+                    self._processed_files_cache.add(cache_key)
+                    any_new_documents_processed_successfully = True
+                    logger.info(f"Successfully processed and indexed {doc_path}")
+                else:
+                    logger.error(f"Failed to add document chunks to vector store for {doc_path}. This document will not be marked as processed.")
+                    all_documents_handled_without_critical_failure = False # Failure to add is critical for this doc
+            
+            except Exception as e:
+                logger.error(f"Failed to process and index document {doc_path}: {e}", exc_info=True)
+                all_documents_handled_without_critical_failure = False # Exception during processing is critical
+                # Decide whether to stop for all docs or continue with the next one
+                # For now, we'll let it continue with other files, but mark overall success based on this flag
+        
+        if any_new_documents_processed_successfully:
+            try:
+                count = self.vector_manager.get_collection_count()
+                logger.info(f"Vector store collection '{self.vector_manager.collection_name}' now has {count} items.")
+            except Exception as e:
+                logger.warning(f"Error retrieving collection count after processing: {e}")
+        
+        return all_documents_handled_without_critical_failure
+
+
+    def analyze_economic_impact(
+        self,
+        query: str,
+        document_paths: Optional[List[str]] = None,
+        analysis_type: str = ANALYSIS_TYPE_BASIC_RAG,
+        k_retrieval: int = 5,
+        aspect_to_analyze: Optional[str] = None,
+        force_reprocess_docs: bool = False
+    ) -> str:
+        logger.info(f"Iniciando análisis de impacto económico. Consulta: '{query}', Tipo: {analysis_type}, Aspecto: '{aspect_to_analyze}'")
+
+        if document_paths:
+            logger.info(f"Asegurando que los documentos estén procesados: {document_paths}")
+            if not self.process_and_index_documents(document_paths, force_reprocess=force_reprocess_docs):
+                # If processing/indexing any document critically failed
+                return "Error: Falló el procesamiento o indexación de uno o más documentos. El análisis no puede proceder de manera confiable."
+        
+        collection_count = 0
+        try:
+            collection_count = self.vector_manager.get_collection_count()
+        except Exception as e:
+            logger.warning(f"No se pudo obtener el conteo de la colección: {e}. Asumiendo 0.")
+
+        retrieved_chunks_for_analysis: List[Dict[str, Any]] = []
+        combined_chunks_text_for_summary = "No se recuperó contexto relevante para la consulta."
+
+        # Condición para recuperar chunks
+        # AIN_EXTRACT puede tener un manejo especial, podría no necesitar query si se le da un solo doc_path.
+        needs_general_retrieval = True
+        query_for_retrieval = query # Usar la query original por defecto
+
+        if analysis_type == ANALYSIS_TYPE_AIN_EXTRACT:
+            if document_paths and len(document_paths) == 1:
+                # Si es AIN_EXTRACT y se da un solo documento, la query de recuperación se enfoca en ese documento.
+                # La query original del usuario podría ser más genérica como "extrae componentes AIN".
+                ain_doc_name = os.path.basename(document_paths[0])
+                query_for_retrieval = f"Información relevante y componentes del Análisis de Impacto Normativo del documento {ain_doc_name}"
+                logger.info(f"Consulta de recuperación para AIN_EXTRACT (documento único): '{query_for_retrieval}'")
+            elif not query: # Si es AIN_EXTRACT sin query Y sin un doc_path único
+                 logger.info(f"Para AIN_EXTRACT sin query específica o documento único, no se realizará recuperación de contexto genérica.")
+                 needs_general_retrieval = False
+        
+        if not query_for_retrieval and needs_general_retrieval: # Si después de la lógica anterior no hay query_for_retrieval
+            logger.warning(f"No hay una consulta de recuperación definida para el análisis tipo '{analysis_type}'. El contexto podría ser limitado.")
+            needs_general_retrieval = False
+
+
+        if needs_general_retrieval:
+            if collection_count > 0 :
+                logger.info(f"Recuperando contexto relevante para la consulta de recuperación: '{query_for_retrieval}' (k={k_retrieval})...")
+                retrieved_docs_objects = self.vector_manager.similarity_search(query_for_retrieval, k=k_retrieval)
+                retrieved_chunks_for_analysis = [{"page_content": doc.page_content, "metadata": doc.metadata} for doc in retrieved_docs_objects]
+                
+                if retrieved_chunks_for_analysis:
+                    combined_chunks_text_for_summary = "\n\n---\n\n".join([chunk["page_content"] for chunk in retrieved_chunks_for_analysis])
+                    logger.info(f"Contexto recuperado para análisis (longitud combinada: {len(combined_chunks_text_for_summary)} caracteres).")
+                else:
+                    logger.warning(f"No se encontró contexto relevante para la consulta de recuperación: '{query_for_retrieval}'.")
+                    # combined_chunks_text_for_summary ya tiene un valor por defecto.
+            else:
+                logger.warning("La base de conocimiento vectorial está vacía. No se puede recuperar contexto.")
+                # combined_chunks_text_for_summary ya tiene un valor por defecto.
+        
+        # --- NUEVO: Generar Título y Resumen Inicial del Contexto Recuperado ---
+        # Se usa la 'query' original del usuario para orientar el título/resumen del contexto recuperado.
+        title_and_initial_summary = self.llm_handler.generate_title_and_summary(
+            combined_context_text=combined_chunks_text_for_summary,
+            original_query=query # La query original del usuario
+        )
+        # --- FIN NUEVO ---
+
+        main_analysis_response = ""
+        # Llamar al método apropiado del LLMHandler basado en analysis_type
+        if analysis_type == ANALYSIS_TYPE_BASIC_RAG:
+            main_analysis_response = self.llm_handler.generate_response_rag(query, retrieved_chunks_for_analysis)
+        elif analysis_type == ANALYSIS_TYPE_COT:
+            if not aspect_to_analyze:
+                logger.error("El análisis CoT requiere que se especifique 'aspect_to_analyze'.")
+                # Devolver el título y resumen incluso si el análisis principal falla por esta razón
+                return f"{title_and_initial_summary}\n\n--- Análisis Detallado ({analysis_type.replace('_', ' ').title()}) ---\nError: 'aspect_to_analyze' falta para el análisis CoT."
+            main_analysis_response = self.llm_handler.generate_response_cot_analysis(query, retrieved_chunks_for_analysis, aspect_to_analyze)
+        elif analysis_type == ANALYSIS_TYPE_TOT:
+            main_analysis_response = self.llm_handler.generate_response_tot_exploration(query, retrieved_chunks_for_analysis)
+        elif analysis_type == ANALYSIS_TYPE_AIN_EXTRACT:
+            # Para AIN_EXTRACT, la 'query' original puede ser el 'query_for_ain'
+            # El retrieved_chunks_for_analysis ya se obtuvo (o no, si needs_general_retrieval fue False)
+            if not retrieved_chunks_for_analysis and needs_general_retrieval: # Solo advertir si se esperaba recuperación
+                logger.warning("No se recuperó contexto para la extracción AIN, aunque se intentó. El resultado dependerá del handler.")
+            main_analysis_response = self.llm_handler.generate_response_extract_ain(retrieved_chunks_for_analysis, query_for_ain=query)
+        else:
+            error_msg = f"Error: Tipo de análisis desconocido '{analysis_type}'."
+            logger.error(error_msg)
+            # Devolver el título y resumen incluso si el tipo de análisis es desconocido
+            return f"{title_and_initial_summary}\n\n--- Análisis Detallado (Desconocido) ---\n{error_msg}"
+
+        # --- NUEVO: Combinar todo en la respuesta final ---
+        final_response_parts = [title_and_initial_summary]
+        analysis_title = analysis_type.replace('_', ' ').title()
+        if analysis_type == ANALYSIS_TYPE_COT and aspect_to_analyze:
+            analysis_title += f": {aspect_to_analyze.capitalize()}"
+            
+        final_response_parts.append(f"\n--- Análisis Detallado ({analysis_title}) ---")
+        final_response_parts.append(main_analysis_response)
+        
+        final_response = "\n".join(final_response_parts)
+        # --- FIN NUEVO ---
+        
+        return final_response.strip()
+
+    def clear_knowledge_base(self):
+        """Clears all documents from the knowledge base."""
+        logger.info("Clearing knowledge base...")
+        # clear_collection en VectorStoreManager ahora es más robusto (borra y recrea)
+        self.vector_manager.clear_collection()
+        self._processed_files_cache.clear()
+        logger.info("Knowledge base cleared and re-initialized.")
+
+# --- Ejemplo de Uso (si se ejecuta este archivo directamente) ---
+# Normalmente, este agente se usa a través de main.py o un script de orquestación como LangGraph
+if __name__ == '__main__':
+    logger.setLevel(logging.DEBUG) # Para ver más detalle si se ejecuta directamente
+    
+    # Crear directorio de documentos de ejemplo si no existe
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root_dir = os.path.abspath(os.path.join(current_script_dir, "..", "..")) # Sube dos niveles
+    example_doc_dir_main = os.path.join(project_root_dir, "documents", "examples")
+    os.makedirs(example_doc_dir_main, exist_ok=True)
+    
+    sample_reg_path_main = os.path.join(example_doc_dir_main, "dummy_resolution_main_test.txt")
+    
+    with open(sample_reg_path_main, "w", encoding="utf-8") as f:
+        f.write("Artículo Principal 1: El propósito de esta regulación es mejorar la calidad del aire en las ciudades.\n")
+        f.write("Se espera un impacto económico mixto para las industrias, con costos de adaptación pero beneficios en salud pública.\n")
+        f.write("Artículo Principal 2: Las fábricas deben instalar nuevos filtros antes de fin de año.\n")
+        f.write("Esto podría generar una reducción en la producción a corto plazo para algunas, pero incentivar la innovación en tecnologías limpias.\n")
+
+    # Configurar para usar los defaults o puedes mockear dependencias aquí
+    # Asegúrate de que tu Ollama esté corriendo y el modelo por defecto de LLMHandler esté disponible
+    # y que el modelo de embedding por defecto de VectorStoreManager esté accesible.
+    try:
+        agent = EARIAAgent()
+        
+        # Prueba de limpieza (opcional)
+        # logger.info("Limpiando KB para prueba...")
+        # agent.clear_knowledge_base()
+        # initial_count = agent.vector_manager.get_collection_count()
+        # logger.info(f"Conteo inicial KB: {initial_count}")
+
+        # Procesar un documento
+        logger.info(f"Procesando documento de prueba: {sample_reg_path_main}")
+        process_success = agent.process_and_index_documents([sample_reg_path_main], force_reprocess=True)
+        if not process_success:
+            logger.error("Falló el procesamiento del documento de prueba. Abortando ejemplo.")
+            exit()
+
+        # count_after_add = agent.vector_manager.get_collection_count()
+        # logger.info(f"Conteo KB después de añadir: {count_after_add}")
+
+        # Ejemplo de consulta CoT
+        query_cot = "Analizar el impacto económico de la instalación de nuevos filtros según el documento."
+        aspect_cot = "instalación de nuevos filtros y sus consecuencias para las fábricas"
+        
+        logger.info(f"\n--- Iniciando Prueba de Análisis CoT ---")
+        response_cot = agent.analyze_economic_impact(
+            query=query_cot,
+            document_paths=[sample_reg_path_main], # Asegurar que se considera este documento
+            analysis_type=ANALYSIS_TYPE_COT,
+            aspect_to_analyze=aspect_cot,
+            k_retrieval=2 # Pedir pocos chunks para el ejemplo
+        )
+        print("\n--- Respuesta del Agente (Análisis CoT) ---")
+        print(response_cot)
+        print("---------------------------------------\n")
+
+        # Ejemplo de consulta RAG básico
+        query_rag = "¿Cuál es el propósito principal de la regulación descrita?"
+        logger.info(f"\n--- Iniciando Prueba de Análisis RAG Básico ---")
+        response_rag = agent.analyze_economic_impact(
+            query=query_rag,
+            document_paths=[sample_reg_path_main],
+            analysis_type=ANALYSIS_TYPE_BASIC_RAG,
+            k_retrieval=1
+        )
+        print("\n--- Respuesta del Agente (RAG Básico) ---")
+        print(response_rag)
+        print("---------------------------------------\n")
+
+    except Exception as e:
+        logger.error(f"Error en el ejemplo de uso de EARIAAgent: {e}", exc_info=True)
+        logger.info("Asegúrate de que Ollama esté corriendo con los modelos necesarios "
+                    "y que la configuración de paths sea correcta.")
+    finally:
+        # Limpieza opcional del archivo de prueba
+        if os.path.exists(sample_reg_path_main):
+            # os.remove(sample_reg_path_main)
+            logger.info(f"Archivo de prueba '{sample_reg_path_main}' no eliminado para revisión. Puedes borrarlo manualmente.")
